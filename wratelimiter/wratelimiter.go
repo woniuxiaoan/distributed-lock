@@ -3,7 +3,6 @@ package wratelimiter
 import (
 	"errors"
 	"gopkg.in/redis.v5"
-	"log"
 	"time"
 )
 
@@ -41,10 +40,10 @@ redis.call("setex", token_num_key, ttl, token_num)
 redis.call("setex", token_num_last_updated_time_key, ttl, token_num_last_updated_time)
 
 if allowed then
-  return {1}
+  return {token_num}
 end
 
-return {0}
+return {-1}
 `
 
 var hashScript string
@@ -97,12 +96,11 @@ func (l *Limiter) GenerateKeys() []string {
 	}
 }
 
-func (l *Limiter) RequestTokens(tokeNums int64) (bool, error) {
+func (l *Limiter) RequestTokens(tokeNums int64) error {
 	if len(hashScript) == 0 {
 		res, err := l.redisClient.ScriptLoad(Script).Result()
 		if err != nil {
-			log.Println(err)
-			return false, err
+			return err
 		}
 		hashScript = res
 	}
@@ -110,14 +108,17 @@ func (l *Limiter) RequestTokens(tokeNums int64) (bool, error) {
 	requiredTime := time.Now().UnixNano() / int64(time.Millisecond)
 	res, err := l.redisClient.EvalSha(hashScript, l.GenerateKeys(), requiredTime, l.max, int64(l.duration), tokeNums, l.rate).Result()
 	if err != nil {
-		log.Println(err)
-		return false, err
+		return err
 	}
 
 	interfaces, ok := res.([]interface{})
-	if ok {
-		return interfaces[0].(int64) == 1, nil
+	if !ok {
+		return errors.New("internal error")
 	}
 
-	return false, errors.New("Marshel Result Error")
+	if interfaces[0].(int64) == -1 {
+		return errors.New("令牌不够")
+	}
+
+	return nil
 }
