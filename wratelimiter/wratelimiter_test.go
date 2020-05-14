@@ -1,27 +1,25 @@
 package wratelimiter
 
 import (
-	"fmt"
-	"gopkg.in/redis.v5"
 	"testing"
 	"time"
 )
 
 func TestLimiterRequest(t *testing.T) {
 	uniqueKey := "qrain|get|files"
-	redisClient := redis.NewClient(&redis.Options{
-		Password: "",
-		Addr:     "localhost:6379",
-	})
-
-	limiter := NewLimiter(uniqueKey, 1, time.Second*10, redisClient)
-	res, err := limiter.RequestTokens(1)
-
-	if err != nil {
-		fmt.Println("Error!!, ", err)
-	} else {
-		fmt.Println(res)
+	setting := &LimiterSetting{
+		UniqueKey:           uniqueKey,
+		Max:                  5,
+		Duration:             time.Second * 10,
+		ScriptReloadDuration: time.Second * 5,
+		RedisAddr:            "localhost:6379",
+		RedisPwd:             "",
 	}
+	limiter := NewLimiter(setting)
 
-	time.Now().UnixNano()
+	if tokens, err := limiter.RequestTokens(1); err != nil {
+		t.Logf("request token failed: %v\n", err)
+	} else {
+		t.Logf("succeed,剩余%v个令牌", tokens)
+	}
 }
