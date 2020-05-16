@@ -2,25 +2,29 @@ package wratelimiter
 
 import (
 	"testing"
+	"time"
 )
 
 func TestLimiterRequest(t *testing.T) {
 	uniqueKey := "qrain|get|files"
 	setting := &LimiterSetting{
 		UniqueKey:           uniqueKey,
-		Max:                  10,
+		Max:                  50,
 		RedisAddr:            "localhost:6379",
 		RedisPwd:             "",
-		DurationMicrosecondsPerToken: 1000000,
+		DurationMicrosecondsPerToken: 10000,
 		RefreshDurationSeconds: 60,
 		ScriptReloadSeconds: 10,
 		RedisClusterMod: true,
 	}
 	limiter := NewLimiter(setting)
 
-	if tokens, err := limiter.RequestTokens(6); err != nil {
-		t.Logf("request token failed: %v\n", err)
-	} else {
-		t.Logf("succeed,剩余%v个令牌", tokens)
+	for i := 0; i<50; i++ {
+		if tokens, err := limiter.RequestTokens(5); err != nil {
+			t.Logf("第%d次, request token failed: %v\n", i+1, err)
+		} else {
+			t.Logf("第%d次, succeed,剩余%v个令牌", i+1, tokens)
+		}
+		time.Sleep(time.Millisecond * 10)
 	}
 }
