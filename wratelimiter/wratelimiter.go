@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const Script = `
+const LuaScriptContent = `
 local function trim(origin, tag)
    local result = origin
    if string.len(tag) ~= 0 then
@@ -61,23 +61,12 @@ end
 
 return {token_num, 0}
 `
-
-var hashScript string
 const (
 	defaultReloadDurationSeconds = 600
 	defaultRefreshDurationSeconds = 120
 )
 
-type limiter struct {
-	uniqueKey      string
-	max            int64
-	redisClient    *redis.Client
-	rate           int64
-	scriptReloadDurationSeconds int
-	refreshDurationSeconds int
-	hashTag string
-	rand *rand.Rand
-}
+var hashScript string
 
 type RateLimiter interface {
 	RequestTokens(tokenNumsRequired int64) (int64, error)
@@ -92,6 +81,87 @@ type LimiterSetting struct {
 	RedisAddr            string
 	RedisPwd             string
 	RedisClusterMod bool
+}
+
+type limiter struct {
+	uniqueKey      string
+	max            int64
+	redisClient    *redis.Client
+	rate           int64
+	scriptReloadDurationSeconds int
+	refreshDurationSeconds int
+	hashTag string
+	rand *rand.Rand
+}
+
+func (l *limiter) generateFingerPrint() string {
+	return strconv.FormatUint(l.rand.Uint64(), 10)
+}
+
+func (l *limiter) generateKeys() []string {
+	keys := []string{
+		l.uniqueKey + "|" + "token_num" ,
+		l.uniqueKey + "|" + "token_num_last_updated_key",
+	}
+
+	if len(l.hashTag) != 0 {
+		for i := 0; i<len(keys); i++ {
+			keys[i] = fmt.Sprintf("%v%s", keys[i], l.hashTag)
+		}
+	}
+
+	return keys
+}
+
+func (l *limiter) generateArgs(requiredTime int64, tokenNumsRequired int64) []interface{} {
+	args := []interface{}{
+		requiredTime,
+		l.max,
+		l.refreshDurationSeconds,
+		tokenNumsRequired,
+		l.rate,
+		l.hashTag,
+	}
+
+	if len(l.hashTag) != 0 {
+		for i := 0; i < len(args) - 1; i++ {
+			args[i] = fmt.Sprintf("%v%s", args[i], l.hashTag)
+		}
+	}
+
+	return args
+}
+
+func (l *limiter) RequestTokens(tokeNumsRequired int64) (int64, error) {
+	if tokeNumsRequired > l.max {
+		return -1, fmt.Errorf("允许请求最大值为%d", l.max)
+	}
+
+	if len(hashScript) == 0 {
+		res, err := l.redisClient.ScriptLoad(LuaScriptContent).Result()
+		if err != nil {
+			return -1, err
+		}
+		hashScript = res
+	}
+
+	requiredTime := time.Now().UnixNano() / int64(time.Microsecond)
+	interfaces, err := l.redisClient.EvalSha(hashScript, l.generateKeys(), l.generateArgs(requiredTime, tokeNumsRequired)...).Result()
+	if err != nil {
+		return -1, err
+	}
+
+	res, ok := interfaces.([]interface{})
+	if !ok {
+		return -1, errors.New("transfer interfaces failed")
+	}
+
+	tokensLeft, pass := res[0].(int64), res[1].(int64) == 1
+	if !pass {
+		return tokensLeft, errors.New("令牌不足")
+	}
+
+	return tokensLeft, nil
 }
 
 func NewLimiter(setting *LimiterSetting) (RateLimiter, error) {
@@ -136,81 +206,11 @@ func NewLimiter(setting *LimiterSetting) (RateLimiter, error) {
 
 		for {
 			<-ticker.C
-			redisClient.ScriptLoad(Script)
+			redisClient.ScriptLoad(LuaScriptContent)
 			ticker.Reset(duration)
 		}
 
 	}()
 
 	return limiter, nil
-}
-
-func (l *limiter) generateFingerPrint() string {
-	return strconv.FormatUint(l.rand.Uint64(), 10)
-}
-
-func (l *limiter) generateKeys() []string {
-	keys := []string{
-		l.uniqueKey + "|" + "token_num" ,
-		l.uniqueKey + "|" + "token_num_last_updated_key",
-	}
-
-	if len(l.hashTag) != 0 {
-		for i := 0; i<len(keys); i++ {
-			keys[i] = fmt.Sprintf("%v%s", keys[i], l.hashTag)
-		}
-	}
-
-	return keys
-}
-
-func (l *limiter) RequestTokens(tokeNumsRequired int64) (int64, error) {
-	if tokeNumsRequired > l.max {
-		return -1, fmt.Errorf("允许请求最大值为%d", l.max)
-	}
-
-	if len(hashScript) == 0 {
-		res, err := l.redisClient.ScriptLoad(Script).Result()
-		if err != nil {
-			return -1, err
-		}
-		hashScript = res
-	}
-
-	requiredTime := time.Now().UnixNano() / int64(time.Microsecond)
-	interfaces, err := l.redisClient.EvalSha(hashScript, l.generateKeys(), l.generateArgs(requiredTime, tokeNumsRequired)...).Result()
-	if err != nil {
-		return -1, err
-	}
-
-	res, ok := interfaces.([]interface{})
-	if !ok {
-		return -1, errors.New("transfer interfaces failed")
-	}
-
-	tokensLeft, pass := res[0].(int64), res[1].(int64) == 1
-	if !pass {
-		return tokensLeft, errors.New("令牌不足")
-	}
-
-	return tokensLeft, nil
-}
-
-func (l *limiter) generateArgs(requiredTime int64, tokenNumsRequired int64) []interface{} {
-	args := []interface{}{
-		requiredTime,
-		l.max,
-		l.refreshDurationSeconds,
-		tokenNumsRequired,
-		l.rate,
-		l.hashTag,
-	}
-
-	if len(l.hashTag) != 0 {
-		for i := 0; i < len(args) - 1; i++ {
-			args[i] = fmt.Sprintf("%v%s", args[i], l.hashTag)
-		}
-	}
-
-	return args
 }
