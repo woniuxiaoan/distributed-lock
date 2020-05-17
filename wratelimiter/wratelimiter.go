@@ -64,7 +64,7 @@ return {token_num, 0}
 
 var hashScript string
 
-type Limiter struct {
+type limiter struct {
 	uniqueKey      string
 	max            int64
 	redisClient    *redis.Client
@@ -73,6 +73,10 @@ type Limiter struct {
 	refreshDurationSeconds int
 	hashTag string
 	rand *rand.Rand
+}
+
+type RateLimiter interface {
+	RequestTokens(tokenNumsRequired int64) (int64, error)
 }
 
 type LimiterSetting struct {
@@ -86,7 +90,7 @@ type LimiterSetting struct {
 	RedisClusterMod bool
 }
 
-func NewLimiter(setting *LimiterSetting) *Limiter {
+func NewLimiter(setting *LimiterSetting) RateLimiter {
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     setting.RedisAddr,
 		Password: setting.RedisPwd,
@@ -100,7 +104,7 @@ func NewLimiter(setting *LimiterSetting) *Limiter {
 		}
 	}()
 
-	limiter := &Limiter{
+	limiter := &limiter{
 		uniqueKey:   setting.UniqueKey,
 		max:         setting.Max,
 		redisClient: redisClient,
@@ -116,11 +120,11 @@ func NewLimiter(setting *LimiterSetting) *Limiter {
 	return limiter
 }
 
-func (l *Limiter) generateFingerPrint() string {
+func (l *limiter) generateFingerPrint() string {
 	return strconv.FormatUint(l.rand.Uint64(), 10)
 }
 
-func (l *Limiter) generateKeys() []string {
+func (l *limiter) generateKeys() []string {
 	keys := []string{
 		l.uniqueKey + "|" + "token_num" ,
 		l.uniqueKey + "|" + "token_num_last_updated_key",
@@ -135,7 +139,7 @@ func (l *Limiter) generateKeys() []string {
 	return keys
 }
 
-func (l *Limiter) RequestTokens(tokeNumsRequired int64) (int64, error) {
+func (l *limiter) RequestTokens(tokeNumsRequired int64) (int64, error) {
 	if tokeNumsRequired > l.max {
 		return -1, fmt.Errorf("允许请求最大值为%d", l.max)
 	}
@@ -167,7 +171,7 @@ func (l *Limiter) RequestTokens(tokeNumsRequired int64) (int64, error) {
 	return tokensLeft, nil
 }
 
-func (l *Limiter) generateArgs(requiredTime int64, tokenNumsRequired int64) []interface{} {
+func (l *limiter) generateArgs(requiredTime int64, tokenNumsRequired int64) []interface{} {
 	args := []interface{}{
 		requiredTime,
 		l.max,
