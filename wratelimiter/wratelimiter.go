@@ -63,13 +63,17 @@ return {token_num, 0}
 `
 
 var hashScript string
+const (
+	defaultReloadDurationSeconds = 600
+	defaultRefreshDurationSeconds = 120
+)
 
 type limiter struct {
 	uniqueKey      string
 	max            int64
 	redisClient    *redis.Client
 	rate           int64
-	reloadDurationSeconds int
+	scriptReloadDurationSeconds int
 	refreshDurationSeconds int
 	hashTag string
 	rand *rand.Rand
@@ -82,42 +86,63 @@ type RateLimiter interface {
 type LimiterSetting struct {
 	UniqueKey            string
 	Max                  int64
-	DurationMicrosecondsPerToken     int64
-	ScriptReloadSeconds int
+	TokensPerSecond     int64
+	ScriptReloadDurationSeconds int
 	RefreshDurationSeconds int
 	RedisAddr            string
 	RedisPwd             string
 	RedisClusterMod bool
 }
 
-func NewLimiter(setting *LimiterSetting) RateLimiter {
+func NewLimiter(setting *LimiterSetting) (RateLimiter, error) {
 	redisClient := redis.NewClient(&redis.Options{
 		Addr:     setting.RedisAddr,
 		Password: setting.RedisPwd,
 	})
 
-	go func() {
-		ticker := time.Tick(time.Second * time.Duration(setting.ScriptReloadSeconds))
-		for {
-			<-ticker
-			redisClient.ScriptLoad(Script)
-		}
-	}()
+	if err := redisClient.Ping().Err(); err != nil {
+		return nil, err
+	}
+
+	if setting.Max == 0 || setting.TokensPerSecond == 0 || len(setting.UniqueKey) == 0 {
+		return nil, errors.New("Max/TokensPerSeconds/UniqueKey should be set correctly")
+	}
 
 	limiter := &limiter{
 		uniqueKey:   setting.UniqueKey,
 		max:         setting.Max,
 		redisClient: redisClient,
-		rate:        setting.DurationMicrosecondsPerToken,
-		refreshDurationSeconds: setting.RefreshDurationSeconds,
+		rate:        int64((time.Second/time.Microsecond) / time.Duration(setting.TokensPerSecond)), //每多少microSeconds产生一个token
+		refreshDurationSeconds: defaultRefreshDurationSeconds,
+		scriptReloadDurationSeconds: defaultReloadDurationSeconds,
 		rand: rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+
+	if setting.ScriptReloadDurationSeconds != 0 {
+		limiter.scriptReloadDurationSeconds = setting.ScriptReloadDurationSeconds
+	}
+
+	if setting.RefreshDurationSeconds != 0 {
+		limiter.refreshDurationSeconds = setting.RefreshDurationSeconds
 	}
 
 	if setting.RedisClusterMod {
 		limiter.hashTag = fmt.Sprintf("|{%s}", limiter.generateFingerPrint())
 	}
 
-	return limiter
+	go func() {
+		duration := time.Second * time.Duration(setting.ScriptReloadDurationSeconds)
+		ticker := time.NewTimer(duration)
+
+		for {
+			<-ticker.C
+			redisClient.ScriptLoad(Script)
+			ticker.Reset(duration)
+		}
+
+	}()
+
+	return limiter, nil
 }
 
 func (l *limiter) generateFingerPrint() string {

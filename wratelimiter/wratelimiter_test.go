@@ -12,12 +12,15 @@ func TestLimiterRequest(t *testing.T) {
 		Max:                  50,
 		RedisAddr:            "localhost:6379",
 		RedisPwd:             "",
-		DurationMicrosecondsPerToken: 10000,
-		RefreshDurationSeconds: 60,
-		ScriptReloadSeconds: 10,
+		TokensPerSecond: 10,
 		RedisClusterMod: true,
 	}
-	limiter := NewLimiter(setting)
+
+	limiter, err := NewLimiter(setting)
+	if err != nil {
+		t.Errorf("NewLimiter failed: %v", err)
+		return
+	}
 
 	for i := 0; i<50; i++ {
 		if tokens, err := limiter.RequestTokens(5); err != nil {
